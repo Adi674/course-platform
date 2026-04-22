@@ -5,7 +5,7 @@ from config import settings
 from contextlib import asynccontextmanager
 from auth.router import router as auth_router
 from web_streaming.livekit.router import router as livekit_router
-from .redis_client import init_redis, close_redis
+from redis_client import init_redis, close_redis  # fixed: was "from .redis_client" (relative import not valid at top level)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

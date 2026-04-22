@@ -23,10 +23,13 @@ def get_redis() -> redis.Redis:
 
 # Key builders
 def room_active_key(classroom_id: str) -> str:
+    """'true' string when class is live."""
     return f"classroom:{classroom_id}:active"
 
 def room_participants_key(classroom_id: str) -> str:
+    """Redis SET of user_id strings currently in the room."""
     return f"classroom:{classroom_id}:participants"
 
-def room_mic_allowed_key(classroom_id: str) -> str:
-    return f"classroom:{classroom_id}:mic_allowed"
+def room_mic_open_key(classroom_id: str) -> str:
+    """'true' string when teacher has opened mic for ALL students."""
+    return f"classroom:{classroom_id}:mic_open"

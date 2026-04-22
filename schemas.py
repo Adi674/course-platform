@@ -43,3 +43,43 @@ class TokenData(BaseModel):
     user_id: str
     email: str
     role: str
+
+# --- Classroom schemas ---
+
+class ClassroomCreate(BaseModel):
+    title: str
+    batch_id: UUID
+    description: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+
+class ClassroomOut(BaseModel):
+    id: UUID
+    teacher_id: UUID
+    batch_id: UUID
+    title: str
+    description: Optional[str] = None
+    room_name: str
+    join_token: str
+    status: ClassroomStatus
+    scheduled_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# --- LiveKit / Streaming schemas ---
+
+class LiveKitTokenResponse(BaseModel):
+    token: str
+    room_name: str
+
+class ParticipantOut(BaseModel):
+    id: UUID
+    name: str
+    email: EmailStr
+    role: UserRole
+
+class MicActionRequest(BaseModel):
+    student_id: UUID
