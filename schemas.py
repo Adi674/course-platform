@@ -51,6 +51,7 @@ class ClassroomCreate(BaseModel):
     batch_id: UUID
     description: Optional[str] = None
     scheduled_at: Optional[datetime] = None
+    duration_minutes: int = 60
 
 class ClassroomOut(BaseModel):
     id: UUID
@@ -65,6 +66,7 @@ class ClassroomOut(BaseModel):
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
     created_at: datetime
+    duration_minutes: int
 
     class Config:
         from_attributes = True

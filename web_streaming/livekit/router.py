@@ -16,10 +16,11 @@ async def create_classroom(
     batch_id: UUID,
     description: str = None,
     scheduled_at: datetime = None,
+    duration_minutes: int = 60,
     teacher: UserOut = Depends(require_teacher),
 ):
     """Teacher creates a new classroom."""
-    return await service.create_classroom(teacher, title, description, batch_id, scheduled_at)
+    return await service.create_classroom(teacher, title, description, batch_id, scheduled_at, duration_minutes)
 
 
 @router.post("/{classroom_id}/start")

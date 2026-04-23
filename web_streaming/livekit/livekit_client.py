@@ -30,8 +30,12 @@ async def create_room(room_name: str, max_participants: int = 200) -> Dict:
 
 
 async def delete_room(room_name: str) -> None:
-    """Closes a LiveKit room, disconnecting all participants."""
-    await room_service.delete_room(DeleteRoomRequest(room=room_name))
+    """Closes a LiveKit room. Safe to call even if room no longer exists."""
+    try:
+        await room_service.delete_room(DeleteRoomRequest(room=room_name))
+    except Exception as e:
+        if "not_found" not in str(e).lower() and "does not exist" not in str(e).lower():
+            raise
 
 
 def generate_token(
