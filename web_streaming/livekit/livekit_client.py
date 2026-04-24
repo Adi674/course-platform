@@ -43,9 +43,6 @@ def generate_token(
     identity: str,
     participant_name: str,
     can_publish: bool,
-    can_publish_audio: bool,
-    can_publish_video: bool,
-    can_share_screen: bool,
     can_subscribe: bool,
     ttl_seconds: int = 3600,
 ) -> str:
@@ -56,23 +53,13 @@ def generate_token(
     Students  -> can_publish=False (subscribe only) unless teacher grants mic,
                 in which case can_publish=True but only MICROPHONE source allowed.
     """
-    allowed_sources = []
-    if can_publish_audio:
-        allowed_sources.append(TrackSource.MICROPHONE)
-    if can_publish_video:
-        allowed_sources.append(TrackSource.CAMERA)
-    if can_share_screen:
-        allowed_sources.append(TrackSource.SCREEN_SHARE)
-        allowed_sources.append(TrackSource.SCREEN_SHARE_AUDIO)
 
     grant = VideoGrants(
         room_join=True,
         room=room_name,
         can_publish=can_publish,
         can_publish_data=True,
-        can_publish_sources=allowed_sources,
         can_subscribe=can_subscribe,
-        can_update_own_metadata=True,
     )
 
     access_token = (

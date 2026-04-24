@@ -202,9 +202,6 @@ async def join_classroom(join_token: str, user: UserOut) -> LiveKitTokenResponse
         identity=str(user.id),
         participant_name=user.name,
         can_publish=can_publish,
-        can_publish_audio=can_publish_audio,
-        can_publish_video=can_publish_video,
-        can_share_screen=can_share_screen,
         can_subscribe=True,
     )
 
