@@ -225,7 +225,13 @@ async def join_classroom(join_token: str, user: UserOut) -> LiveKitTokenResponse
     # Write to Redis cache (fast participant list)
     await redis_client.sadd(room_participants_key(str(classroom_id)), str(user.id))
 
-    return LiveKitTokenResponse(token=livekit_token, room_name=classroom["room_name"])
+    return LiveKitTokenResponse(
+        token=livekit_token,
+        room_name=classroom["room_name"],
+        classroom_id=str(classroom_id),
+        classroom_title=classroom["title"],
+        can_publish=can_publish
+    )
 
 
 async def leave_classroom(classroom_id: UUID, user: UserOut):

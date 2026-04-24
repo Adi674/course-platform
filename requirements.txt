@@ -7,5 +7,5 @@ bcrypt
 PyJWT
 python-jose[cryptography]
 livekit-api
-redis
+redis>=7.4.0
 python-dotenv
