@@ -33,3 +33,13 @@ def room_participants_key(classroom_id: str) -> str:
 def room_mic_open_key(classroom_id: str) -> str:
     """'true' string when teacher has opened mic for ALL students."""
     return f"classroom:{classroom_id}:mic_open"
+  
+ 
+def room_mic_allowed_key(classroom_id: str) -> str:
+    """
+    Per-student mic allowlist — Redis SET of user_id strings.
+    A student present in this set has been individually granted mic access by the teacher.
+    Used alongside room_mic_open_key: a student can publish audio if EITHER the global
+    mic is open OR their user_id is in this per-student set.
+    """
+    return f"classroom:{classroom_id}:mic_allowed"

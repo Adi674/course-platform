@@ -4,33 +4,71 @@ from uuid import UUID, uuid4
 
 from database import get_supabase
 from exceptions import BadRequestError, ForbiddenError, NotFoundError
-from redis_client import get_redis, room_active_key, room_mic_open_key, room_participants_key
-from schemas import ClassroomStatus, LiveKitTokenResponse, ParticipantOut, UserOut, UserRole
+from redis_client import get_redis, room_active_key, room_mic_open_key, room_mic_allowed_key, room_participants_key
+from schemas import ClassroomStatus, LiveKitTokenResponse, ParticipantOut, UserOut, UserRole, StudentMicStatusOut,TokenRefreshResponse
 from web_streaming.livekit import livekit_client
 
 DEFAULT_CLASS_DURATION_MINUTES = 60  # fallback if teacher doesn't set duration
 
 
+async def _get_live_classroom(classroom_id: UUID):
+    """Fetch classroom row and assert it is currently LIVE."""
+    supabase = get_supabase()
+    response = (
+        supabase.table("classrooms")
+        .select("*")
+        .eq("id", str(classroom_id))
+        .single()
+        .execute()
+    )
+    if not response.data:
+        raise NotFoundError("Classroom not found")
+    classroom = response.data
+    if classroom["status"] != ClassroomStatus.LIVE.value:
+        raise BadRequestError("Classroom is not currently live")
+    return classroom
+ 
+ 
+async def _assert_teacher_owns(classroom: dict, teacher: UserOut):
+    if classroom["teacher_id"] != str(teacher.id):
+        raise ForbiddenError("You are not the teacher of this classroom")
+ 
+ 
 async def _cleanup_ended_class(classroom_id: str, room_name: str):
     """
-    Idempotent cleanup — safe to call multiple times.
-    Deletes LiveKit room, clears all Redis keys, flips DB status to ENDED.
-    Called by end_class (manual) and join_classroom (TTL expiry detection).
+    Idempotent teardown helper.
+    - Deletes the LiveKit room (kicks all participants).
+    - Clears all 3 Redis keys for this classroom.
+    - Flips DB status to ENDED if not already.
     """
     supabase = get_supabase()
     redis_client = get_redis()
-
-    await livekit_client.delete_room(room_name=room_name)
+ 
+    # Delete LiveKit room — safe on non-existent rooms
+    try:
+        await livekit_client.delete_room(room_name=room_name)
+    except Exception:
+        pass  # already gone is fine
+ 
+    # Clear Redis keys
     await redis_client.delete(room_active_key(classroom_id))
     await redis_client.delete(room_participants_key(classroom_id))
     await redis_client.delete(room_mic_open_key(classroom_id))
-
-    classroom = supabase.table("classrooms").select("status").eq("id", classroom_id).single().execute()
-    if classroom.data and classroom.data["status"] != ClassroomStatus.ENDED.value:
-        supabase.table("classrooms").update({
-            "status": ClassroomStatus.ENDED.value,
-            "ended_at": datetime.utcnow().isoformat()
-        }).eq("id", classroom_id).execute()
+    await redis_client.delete(room_mic_allowed_key(classroom_id))
+ 
+    # Flip status in DB (idempotent)
+    supabase.table("classrooms").update(
+        {"status": ClassroomStatus.ENDED.value, "ended_at": datetime.utcnow().isoformat()}
+    ).eq("id", classroom_id).neq("status", ClassroomStatus.ENDED.value).execute()
+ 
+ 
+def _student_can_publish_audio(mic_open: bool, mic_individually_granted: bool) -> bool:
+    """
+    A student may publish audio if EITHER:
+      - The teacher has globally opened the mic for all students, OR
+      - The teacher has individually granted this student mic access.
+    """
+    return mic_open or mic_individually_granted
 
 
 async def create_classroom(
@@ -202,6 +240,9 @@ async def join_classroom(join_token: str, user: UserOut) -> LiveKitTokenResponse
         identity=str(user.id),
         participant_name=user.name,
         can_publish=can_publish,
+        can_publish_audio=can_publish_audio,
+        can_publish_video=can_publish_video,
+        can_share_screen=can_share_screen,
         can_subscribe=True,
     )
 
@@ -289,6 +330,232 @@ async def close_mics(classroom_id: UUID, teacher: UserOut):
         raise ForbiddenError("You are not the teacher of this classroom")
 
     await redis_client.delete(room_mic_open_key(str(classroom_id)))
+
+async def grant_student_mic(classroom_id: UUID, teacher: UserOut, student_id: UUID):
+    """
+    Teacher individually grants mic access to a specific student.
+ 
+    Steps:
+    1. Validate teacher owns the LIVE classroom.
+    2. Confirm student_id is enrolled in the classroom's batch.
+    3. Add student_id to the Redis mic_allowed SET.
+    4. Attempt a server-side LiveKit unmute on all their audio tracks
+       (best-effort — works only if they are currently in the room).
+ 
+    The student must call GET /classrooms/{id}/token/refresh to receive
+    a new token with can_publish=True before LiveKit will accept their tracks.
+    """
+    classroom = await _get_live_classroom(classroom_id)
+    await _assert_teacher_owns(classroom, teacher)
+ 
+    supabase = get_supabase()
+    # Confirm student is enrolled in this batch
+    enrollment = (
+        supabase.table("batch_enrollments")
+        .select("id")
+        .eq("user_id", str(student_id))
+        .eq("batch_id", classroom["batch_id"])
+        .execute()
+    )
+    if not enrollment.data:
+        raise ForbiddenError("Student is not enrolled in this classroom's batch")
+ 
+    redis_client = get_redis()
+    await redis_client.sadd(room_mic_allowed_key(str(classroom_id)), str(student_id))
+ 
+    # Best-effort server-side unmute via LiveKit API
+    # This mutes/unmutes an existing published track; the student must refresh
+    # their token to gain can_publish permission if they haven't yet.
+    try:
+        participants = await livekit_client.list_participants(classroom["room_name"])
+        for p in participants:
+            if p.get("identity") == str(student_id):
+                for track in p.get("tracks", []):
+                    if track.get("source") == "MICROPHONE":
+                        await livekit_client.unmute_participant_track(
+                            room_name=classroom["room_name"],
+                            identity=str(student_id),
+                            track_sid=track["sid"],
+                        )
+    except Exception:
+        pass  # Participant may not be in room yet; token refresh will handle it
+ 
+ 
+async def revoke_student_mic(classroom_id: UUID, teacher: UserOut, student_id: UUID):
+    """
+    Teacher individually revokes mic access from a specific student.
+ 
+    Steps:
+    1. Validate teacher owns the classroom (any status — revoke should work post-class too).
+    2. Remove student_id from the Redis mic_allowed SET.
+    3. Attempt a server-side LiveKit mute on all their active audio tracks.
+ 
+    The revocation takes effect immediately via server-side mute. The student's
+    current token still has can_publish set; on their next token refresh it will
+    be stripped away.
+    """
+    supabase = get_supabase()
+    response = (
+        supabase.table("classrooms")
+        .select("*")
+        .eq("id", str(classroom_id))
+        .single()
+        .execute()
+    )
+    if not response.data:
+        raise NotFoundError("Classroom not found")
+    classroom = response.data
+    await _assert_teacher_owns(classroom, teacher)
+ 
+    redis_client = get_redis()
+    await redis_client.srem(room_mic_allowed_key(str(classroom_id)), str(student_id))
+ 
+    # Best-effort server-side mute via LiveKit API (immediate effect)
+    try:
+        participants = await livekit_client.list_participants(classroom["room_name"])
+        for p in participants:
+            if p.get("identity") == str(student_id):
+                for track in p.get("tracks", []):
+                    if track.get("source") == "MICROPHONE":
+                        await livekit_client.mute_participant_track(
+                            room_name=classroom["room_name"],
+                            identity=str(student_id),
+                            track_sid=track["sid"],
+                        )
+    except Exception:
+        pass  # Room may be gone; Redis update is the source of truth
+ 
+ 
+async def refresh_token(classroom_id: UUID, user: UserOut) -> TokenRefreshResponse:
+    """
+    Issues a fresh LiveKit JWT for a participant already inside a classroom,
+    reflecting their current mic permissions without forcing a full re-join.
+ 
+    Flow:
+    - Re-reads Redis for current mic_open and mic_allowed state.
+    - Recomputes can_publish / can_publish_audio for the calling user.
+    - Signs and returns a new short-lived LiveKit token (TTL = 1 hour).
+ 
+    Students call this endpoint after the teacher grants or revokes their mic.
+    The client disconnects from LiveKit, swaps the token, and reconnects.
+    TTL is intentionally kept at 1 hour (same as join) to avoid frequent refresh.
+    """
+    supabase = get_supabase()
+    response = (
+        supabase.table("classrooms")
+        .select("*")
+        .eq("id", str(classroom_id))
+        .single()
+        .execute()
+    )
+    if not response.data:
+        raise NotFoundError("Classroom not found")
+    classroom = response.data
+ 
+    if classroom["status"] != ClassroomStatus.LIVE.value:
+        raise BadRequestError("Classroom is not currently live")
+ 
+    # Verify requester is an active participant
+    participant_check = (
+        supabase.table("classroom_participants")
+        .select("id")
+        .eq("classroom_id", str(classroom_id))
+        .eq("user_id", str(user.id))
+        .is_("left_at", None)
+        .execute()
+    )
+    if not participant_check.data:
+        raise ForbiddenError("You are not an active participant in this classroom")
+ 
+    redis_client = get_redis()
+ 
+    can_publish = user.role == UserRole.TEACHER
+    can_publish_audio = user.role == UserRole.TEACHER
+    can_publish_video = user.role == UserRole.TEACHER
+    can_share_screen = user.role == UserRole.TEACHER
+ 
+    if user.role == UserRole.STUDENT:
+        mic_open = await redis_client.get(room_mic_open_key(str(classroom_id)))
+        mic_individually_granted = await redis_client.sismember(
+            room_mic_allowed_key(str(classroom_id)), str(user.id)
+        )
+        can_publish_audio = _student_can_publish_audio(
+            bool(mic_open), bool(mic_individually_granted)
+        )
+        if can_publish_audio:
+            can_publish = True
+ 
+    token = livekit_client.generate_token(
+        room_name=classroom["room_name"],
+        identity=str(user.id),
+        participant_name=user.name,
+        can_publish=can_publish,
+        can_publish_audio=can_publish_audio,
+        can_publish_video=can_publish_video,
+        can_share_screen=can_share_screen,
+        can_subscribe=True,
+    )
+ 
+    return TokenRefreshResponse(
+        token=token,
+        can_publish=can_publish,
+        can_publish_audio=can_publish_audio,
+    )
+ 
+ 
+async def get_mic_status(classroom_id: UUID, teacher: UserOut) -> List[StudentMicStatusOut]:
+    """
+    Returns the list of currently active participants with their individual
+    mic grant status, so the teacher dashboard can show who has mic access.
+ 
+    Steps:
+    1. Validate teacher owns the classroom.
+    2. Read the mic_allowed SET from Redis.
+    3. Fetch user details for all current participants from Redis SET + Supabase.
+    4. Annotate each participant with mic_granted = (their id in mic_allowed).
+    """
+    supabase = get_supabase()
+    response = (
+        supabase.table("classrooms")
+        .select("*")
+        .eq("id", str(classroom_id))
+        .single()
+        .execute()
+    )
+    if not response.data:
+        raise NotFoundError("Classroom not found")
+    await _assert_teacher_owns(response.data, teacher)
+ 
+    redis_client = get_redis()
+ 
+    participant_ids = await redis_client.smembers(room_participants_key(str(classroom_id)))
+    mic_allowed_ids = await redis_client.smembers(room_mic_allowed_key(str(classroom_id)))
+ 
+    if not participant_ids:
+        return []
+ 
+    users_response = (
+        supabase.table("users")
+        .select("id, name, email, role")
+        .in_("id", list(participant_ids))
+        .execute()
+    )
+    if not users_response.data:
+        return []
+ 
+    result = []
+    for u in users_response.data:
+        # Only include students (teachers always have mic; no need to show them here)
+        if u["role"] == UserRole.STUDENT.value:
+            result.append(
+                StudentMicStatusOut(
+                    student_id=UUID(u["id"]),
+                    name=u["name"],
+                    email=u["email"],
+                    mic_granted=u["id"] in mic_allowed_ids,
+                )
+            )
+    return result
 
 
 async def get_live_participants(classroom_id: UUID) -> List[ParticipantOut]:

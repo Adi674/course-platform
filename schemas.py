@@ -88,3 +88,33 @@ class ParticipantOut(BaseModel):
 
 class MicActionRequest(BaseModel):
     student_id: UUID
+
+class MicGrantRequest(BaseModel):
+    """
+    Optional request body for mic grant — reserved for future metadata
+    (e.g. duration_seconds to auto-revoke after N seconds).
+    Currently empty; student_id is passed as a path parameter.
+    """
+    pass
+ 
+ 
+class StudentMicStatusOut(BaseModel):
+    """
+    Returned by GET /classrooms/{id}/mic/status so the teacher can see
+    which students currently have individual mic grants.
+    """
+    student_id: UUID
+    name: str
+    email: str
+    mic_granted: bool
+ 
+ 
+class TokenRefreshResponse(BaseModel):
+    """
+    Returned by GET /classrooms/{id}/token/refresh.
+    Contains a freshly-signed LiveKit JWT reflecting the student's current
+    mic permissions without requiring them to re-join the room.
+    """
+    token: str
+    can_publish: bool
+    can_publish_audio: bool
