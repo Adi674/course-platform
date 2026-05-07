@@ -4,3 +4,4 @@
 *.pyo
 *.pyd
 .env
+__init__.py

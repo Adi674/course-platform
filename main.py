@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from config import settings
 from contextlib import asynccontextmanager
 from auth.router import router as auth_router
+from batch.router import router as batch_router
 from web_streaming.livekit.router import router as livekit_router
 from redis_client import init_redis, close_redis  # fixed: was "from .redis_client" (relative import not valid at top level)
 
@@ -35,6 +36,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Routers
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(livekit_router, prefix="/api/v1")
+app.include_router(batch_router, prefix="/api/v1")
 
 @app.get("/health")
 async def health_check():
