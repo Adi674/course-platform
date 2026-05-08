@@ -43,23 +43,19 @@ def generate_token(
     identity: str,
     participant_name: str,
     can_publish: bool,
+    can_publish_audio: bool,
+    can_publish_video: bool,
+    can_share_screen: bool,
     can_subscribe: bool,
     ttl_seconds: int = 3600,
 ) -> str:
-    """
-    Builds a signed LiveKit JWT with exact per-track permissions.
-
-    Teachers  -> can_publish=True, all sources allowed.
-    Students  -> can_publish=False (subscribe only) unless teacher grants mic,
-                in which case can_publish=True but only MICROPHONE source allowed.
-    """
-
     grant = VideoGrants(
         room_join=True,
         room=room_name,
         can_publish=can_publish,
         can_publish_data=True,
         can_subscribe=can_subscribe,
+        can_update_own_metadata=True,
     )
 
     access_token = (
@@ -70,7 +66,6 @@ def generate_token(
         .with_ttl(timedelta(seconds=ttl_seconds))
     )
     return access_token.to_jwt()
-
 
 async def mute_participant_track(room_name: str, identity: str, track_sid: str) -> None:
     """Server-side mutes a specific participant track immediately."""

@@ -6,14 +6,14 @@ _redis_client: Optional[redis.Redis] = None
 
 async def init_redis():
     global _redis_client
-    _redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-    await _redis_client.ping()
+    _redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    await _redis_client.ping()  # type: ignore[awaitable-is-generator]  # redis-py stubs expose sync bool signature; async client wraps it at runtime
     print("Redis client initialized")
 
 async def close_redis():
     global _redis_client
     if _redis_client:
-        await _redis_client.close()
+        await _redis_client.aclose()  # close() is deprecated since redis-py 5.0.1
         print("Redis client closed")
 
 def get_redis() -> redis.Redis:
@@ -23,18 +23,15 @@ def get_redis() -> redis.Redis:
 
 # Key builders
 def room_active_key(classroom_id: str) -> str:
-    """'true' string when class is live."""
     return f"classroom:{classroom_id}:active"
 
 def room_participants_key(classroom_id: str) -> str:
-    """Redis SET of user_id strings currently in the room."""
     return f"classroom:{classroom_id}:participants"
 
 def room_mic_open_key(classroom_id: str) -> str:
-    """'true' string when teacher has opened mic for ALL students."""
+    """Global mic flag — set to 'true' when teacher opens mic for all students."""
     return f"classroom:{classroom_id}:mic_open"
-  
- 
+
 def room_mic_allowed_key(classroom_id: str) -> str:
     """
     Per-student mic allowlist — Redis SET of user_id strings.
