@@ -255,6 +255,7 @@ async def join_classroom(join_token: str, user: UserOut) -> LiveKitTokenResponse
         classroom_id=classroom_id,
         classroom_title=classroom["title"],
         can_publish=can_publish,
+        role=user.role,
     )
 
 

@@ -79,6 +79,7 @@ class LiveKitTokenResponse(BaseModel):
     classroom_id: str
     classroom_title: str
     can_publish: bool
+    role: UserRole
 
 class ParticipantOut(BaseModel):
     id: UUID
