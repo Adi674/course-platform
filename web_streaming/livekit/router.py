@@ -237,9 +237,51 @@ async def classroom_events(
     )
 
 # ---------------------------------------------------------------------------
-# Recording — Phase 5
+# Phase 6 — Classroom listing (for BatchDetailPage & ClassDetailPage)
 # ---------------------------------------------------------------------------
  
+@router.get("/batch/{batch_id}", response_model=List[dict])
+async def list_classrooms_for_batch(
+    batch_id: UUID,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Lists all classrooms in a batch.
+    Teachers must own the batch; students must be enrolled.
+    """
+    return await classroom_list_service.get_classrooms_for_batch(batch_id, current_user)
+ 
+ 
+@router.get("/{classroom_id}/detail")
+async def get_classroom_detail(
+    classroom_id: UUID,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Returns classroom fields + recordings list.
+    Teachers must own; students must be enrolled in the batch.
+    """
+    return await classroom_list_service.get_classroom_detail(classroom_id, current_user)
+ 
+ 
+
+# ---------------------------------------------------------------------------
+# Recording — Phase 5
+# ---------------------------------------------------------------------------
+@router.get("/recordings/{recording_id}/url")
+async def get_recording_url(
+    recording_id: UUID,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Generates and returns a fresh pre-signed S3 URL for recording playback.
+    Valid for AWS_S3_PRESIGNED_URL_EXPIRY seconds (default 1 hour).
+    Access-gated: teacher owns classroom, or student is enrolled in the batch.
+    """
+    url = await recording_service.get_recording_url(recording_id, current_user)
+    return {"url": url, "expires_in_seconds": settings.AWS_S3_PRESIGNED_URL_EXPIRY}
+
+
 @router.post(
     "/{classroom_id}/recording/start",
     response_model=RecordingOut,
@@ -281,46 +323,5 @@ async def get_recordings(
     url field is None — use GET /recordings/{id}/url for a playback link.
     """
     return await recording_service.get_recordings(classroom_id, current_user)
- 
- 
-@router.get("/recordings/{recording_id}/url")
-async def get_recording_url(
-    recording_id: UUID,
-    current_user: UserOut = Depends(get_current_user),
-):
-    """
-    Generates and returns a fresh pre-signed S3 URL for recording playback.
-    Valid for AWS_S3_PRESIGNED_URL_EXPIRY seconds (default 1 hour).
-    Access-gated: teacher owns classroom, or student is enrolled in the batch.
-    """
-    url = await recording_service.get_recording_url(recording_id, current_user)
-    return {"url": url, "expires_in_seconds": settings.AWS_S3_PRESIGNED_URL_EXPIRY}
-
-# ---------------------------------------------------------------------------
-# Phase 6 — Classroom listing (for BatchDetailPage & ClassDetailPage)
-# ---------------------------------------------------------------------------
- 
-@router.get("/batch/{batch_id}", response_model=List[dict])
-async def list_classrooms_for_batch(
-    batch_id: UUID,
-    current_user: UserOut = Depends(get_current_user),
-):
-    """
-    Lists all classrooms in a batch.
-    Teachers must own the batch; students must be enrolled.
-    """
-    return await classroom_list_service.get_classrooms_for_batch(batch_id, current_user)
- 
- 
-@router.get("/{classroom_id}/detail")
-async def get_classroom_detail(
-    classroom_id: UUID,
-    current_user: UserOut = Depends(get_current_user),
-):
-    """
-    Returns classroom fields + recordings list.
-    Teachers must own; students must be enrolled in the batch.
-    """
-    return await classroom_list_service.get_classroom_detail(classroom_id, current_user)
  
  
