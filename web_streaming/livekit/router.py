@@ -26,6 +26,8 @@ from schemas import (
 )
 from web_streaming.livekit import service
 from web_streaming.livekit.sse import stream_classroom_events
+from web_streaming.livekit import recording_service
+from web_streaming.livekit.schemas import RecordingOut
 
 router = APIRouter(prefix="/classrooms", tags=["classrooms"])
 
@@ -233,3 +235,64 @@ async def classroom_events(
             "X-Accel-Buffering": "no",  # disable nginx response buffering
         },
     )
+
+# ---------------------------------------------------------------------------
+# Recording — Phase 5
+# ---------------------------------------------------------------------------
+ 
+@router.post(
+    "/{classroom_id}/recording/start",
+    response_model=RecordingOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_recording(
+    classroom_id: UUID,
+    teacher: UserOut = Depends(require_teacher),
+):
+    """
+    Teacher starts recording the live classroom.
+    LiveKit egress writes an MP4 directly to S3.
+    Returns the recording row (status="recording", no url yet).
+    """
+    return await recording_service.start_recording(classroom_id, teacher)
+ 
+ 
+@router.post("/{classroom_id}/recording/stop", response_model=RecordingOut)
+async def stop_recording(
+    classroom_id: UUID,
+    teacher: UserOut = Depends(require_teacher),
+):
+    """
+    Teacher stops the active recording.
+    LiveKit finalises the S3 file asynchronously after this call.
+    Returns the updated recording row (status="completed").
+    """
+    return await recording_service.stop_recording(classroom_id, teacher)
+ 
+ 
+@router.get("/{classroom_id}/recordings", response_model=List[RecordingOut])
+async def get_recordings(
+    classroom_id: UUID,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Lists all recordings for a classroom.
+    Teachers must own it; students must be enrolled in the batch.
+    url field is None — use GET /recordings/{id}/url for a playback link.
+    """
+    return await recording_service.get_recordings(classroom_id, current_user)
+ 
+ 
+@router.get("/recordings/{recording_id}/url")
+async def get_recording_url(
+    recording_id: UUID,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Generates and returns a fresh pre-signed S3 URL for recording playback.
+    Valid for AWS_S3_PRESIGNED_URL_EXPIRY seconds (default 1 hour).
+    Access-gated: teacher owns classroom, or student is enrolled in the batch.
+    """
+    url = await recording_service.get_recording_url(recording_id, current_user)
+    return {"url": url, "expires_in_seconds": settings.AWS_S3_PRESIGNED_URL_EXPIRY}
+ 

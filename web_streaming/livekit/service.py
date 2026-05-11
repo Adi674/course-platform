@@ -134,6 +134,9 @@ async def start_class(classroom_id: UUID, teacher: UserOut):
     if classroom["status"] == ClassroomStatus.LIVE.value:
         raise BadRequestError("Classroom is already live")
 
+    await livekit_client.create_room(room_name=classroom["room_name"])
+
+
     update_data = {
         "status": ClassroomStatus.LIVE.value,
         "started_at": datetime.utcnow().isoformat(),
@@ -288,6 +291,19 @@ async def open_mics(classroom_id: UUID, teacher: UserOut):
     redis_client = get_redis()
     await redis_client.set(room_mic_open_key(str(classroom_id)), "true")
 
+    try:
+        participants = await livekit_client.list_participants(classroom["room_name"])
+        for p in participants:
+            # Skip the teacher; update all others (students)
+            if p.identity != str(teacher.id):
+                await livekit_client.update_participant_permissions(
+                    room_name=classroom["room_name"],
+                    identity=p.identity,
+                    can_publish=True  # Allow them to start their mics
+                )
+    except Exception as e:
+        print(f"Failed to push global mic permissions: {e}")
+
 
 async def close_mics(classroom_id: UUID, teacher: UserOut):
     """Globally close mic for all students."""
@@ -295,6 +311,23 @@ async def close_mics(classroom_id: UUID, teacher: UserOut):
     await _assert_teacher_owns(classroom, teacher)
     redis_client = get_redis()
     await redis_client.delete(room_mic_open_key(str(classroom_id)))
+
+    try:
+        participants = await livekit_client.list_participants(classroom["room_name"])
+        for p in participants:
+            if p.identity != str(teacher.id):
+                # Check if they have an individual grant before revoking global access
+                is_granted = await redis_client.sismember(
+                    room_mic_allowed_key(str(classroom_id)), p.identity
+                )
+                if not is_granted:
+                    await livekit_client.update_participant_permissions(
+                        room_name=classroom["room_name"],
+                        identity=p.identity,
+                        can_publish=False
+                    )
+    except Exception as e:
+        print(f"Failed to revoke global mic permissions: {e}")
 
 
 async def grant_student_mic(classroom_id: UUID, teacher: UserOut, student_id: UUID):
@@ -328,18 +361,13 @@ async def grant_student_mic(classroom_id: UUID, teacher: UserOut, student_id: UU
 
     # Best-effort server-side unmute
     try:
-        participants = await livekit_client.list_participants(classroom["room_name"])
-        for p in participants:
-            if p.identity == str(student_id):
-                for track in p.tracks:
-                    if str(track.source) == "SOURCE_MICROPHONE" or "MICROPHONE" in str(track.source):
-                        await livekit_client.unmute_participant_track(
-                            room_name=classroom["room_name"],
-                            identity=str(student_id),
-                            track_sid=track.sid,
-                        )
-    except Exception:
-        pass
+        await livekit_client.update_participant_permissions(
+            room_name=classroom["room_name"],
+            identity=str(student_id),
+            can_publish=True  # This enables the mic button for them instantly
+        )
+    except Exception as e:
+        print(f"LiveKit permission update failed: {e}")
 
 
 async def revoke_student_mic(classroom_id: UUID, teacher: UserOut, student_id: UUID):
@@ -361,15 +389,19 @@ async def revoke_student_mic(classroom_id: UUID, teacher: UserOut, student_id: U
 
     # Immediate server-side mute
     try:
+        await livekit_client.update_participant_permissions(
+            room_name=classroom["room_name"],
+            identity=str(student_id),
+            can_publish=False
+        )
+        # 3. Force-mute them if they were currently speaking
         participants = await livekit_client.list_participants(classroom["room_name"])
         for p in participants:
             if p.identity == str(student_id):
                 for track in p.tracks:
-                    if str(track.source) == "SOURCE_MICROPHONE" or "MICROPHONE" in str(track.source):
+                    if "MICROPHONE" in str(track.source):
                         await livekit_client.mute_participant_track(
-                            room_name=classroom["room_name"],
-                            identity=str(student_id),
-                            track_sid=track.sid,
+                            classroom["room_name"], str(student_id), track.sid
                         )
     except Exception:
         pass
