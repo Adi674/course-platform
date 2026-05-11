@@ -12,7 +12,7 @@ import jwt
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-
+from web_streaming.livekit import classroom_list_service
 from config import settings
 from database import get_supabase
 from dependencies import get_current_user, require_teacher
@@ -295,4 +295,32 @@ async def get_recording_url(
     """
     url = await recording_service.get_recording_url(recording_id, current_user)
     return {"url": url, "expires_in_seconds": settings.AWS_S3_PRESIGNED_URL_EXPIRY}
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Classroom listing (for BatchDetailPage & ClassDetailPage)
+# ---------------------------------------------------------------------------
+ 
+@router.get("/batch/{batch_id}", response_model=List[dict])
+async def list_classrooms_for_batch(
+    batch_id: UUID,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Lists all classrooms in a batch.
+    Teachers must own the batch; students must be enrolled.
+    """
+    return await classroom_list_service.get_classrooms_for_batch(batch_id, current_user)
+ 
+ 
+@router.get("/{classroom_id}/detail")
+async def get_classroom_detail(
+    classroom_id: UUID,
+    current_user: UserOut = Depends(get_current_user),
+):
+    """
+    Returns classroom fields + recordings list.
+    Teachers must own; students must be enrolled in the batch.
+    """
+    return await classroom_list_service.get_classroom_detail(classroom_id, current_user)
+ 
  
