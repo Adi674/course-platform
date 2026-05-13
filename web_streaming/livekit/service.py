@@ -236,6 +236,21 @@ async def join_classroom(join_token: str, user: UserOut) -> LiveKitTokenResponse
         can_subscribe=True,  # Always allow subscribing so students receive teacher tracks
     )
 
+    if user.role == UserRole.STUDENT and can_publish:
+        import asyncio
+        async def _delayed_permission_push():
+            await asyncio.sleep(3)
+            try:
+                await livekit_client.update_participant_permissions(
+                    room_name=classroom["room_name"],
+                    identity=str(user.id),
+                    can_publish=True,
+                    can_subscribe=True,
+                )
+            except Exception as e:
+                print(f"Delayed permission push failed (non-critical): {e}")
+        asyncio.create_task(_delayed_permission_push())
+
     # Log join in Supabase (idempotent)
     existing = (
         supabase.table("classroom_participants")
@@ -299,8 +314,10 @@ async def open_mics(classroom_id: UUID, teacher: UserOut):
                 await livekit_client.update_participant_permissions(
                     room_name=classroom["room_name"],
                     identity=p.identity,
-                    can_publish=True  # Allow them to start their mics
+                    can_publish=True,
+                    can_subscribe=True,
                 )
+                await push_mic_granted(str(classroom_id), p.identity)
     except Exception as e:
         print(f"Failed to push global mic permissions: {e}")
 
@@ -324,8 +341,10 @@ async def close_mics(classroom_id: UUID, teacher: UserOut):
                     await livekit_client.update_participant_permissions(
                         room_name=classroom["room_name"],
                         identity=p.identity,
-                        can_publish=False
+                        can_publish=False,
+                        can_subscribe=True,
                     )
+                    await push_mic_revoked(str(classroom_id), p.identity)
     except Exception as e:
         print(f"Failed to revoke global mic permissions: {e}")
 
@@ -364,7 +383,8 @@ async def grant_student_mic(classroom_id: UUID, teacher: UserOut, student_id: UU
         await livekit_client.update_participant_permissions(
             room_name=classroom["room_name"],
             identity=str(student_id),
-            can_publish=True  # This enables the mic button for them instantly
+            can_publish=True,  # This enables the mic button for them instantly
+            can_subscribe=True,
         )
     except Exception as e:
         print(f"LiveKit permission update failed: {e}")
@@ -392,7 +412,8 @@ async def revoke_student_mic(classroom_id: UUID, teacher: UserOut, student_id: U
         await livekit_client.update_participant_permissions(
             room_name=classroom["room_name"],
             identity=str(student_id),
-            can_publish=False
+            can_publish=False,
+            can_subscribe=True,
         )
         # 3. Force-mute them if they were currently speaking
         participants = await livekit_client.list_participants(classroom["room_name"])
@@ -545,3 +566,24 @@ async def get_live_participants(classroom_id: UUID) -> List[ParticipantOut]:
         )
         for u in response.data
     ]
+
+async def get_student_mic_state(classroom_id: UUID, user: UserOut) -> dict:
+    """
+    Returns the calling student's current mic permission state.
+    Reads from Redis — same source of truth used when generating tokens.
+    Used by the frontend on room join to initialize MicPermissionContext
+    without relying on LiveKit's WebSocket push landing correctly.
+    """
+    redis_client = get_redis()
+    
+    mic_open = await redis_client.get(room_mic_open_key(str(classroom_id)))
+    mic_individually_granted = await redis_client.sismember(
+        room_mic_allowed_key(str(classroom_id)), str(user.id)
+    )
+    can_publish = _student_can_publish_audio(bool(mic_open), bool(mic_individually_granted))
+    
+    return {
+        "can_publish": can_publish,
+        "mic_open": bool(mic_open),
+        "mic_individually_granted": bool(mic_individually_granted),
+    }

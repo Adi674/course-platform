@@ -149,7 +149,7 @@ async def update_participant_permissions(
     room_name: str,
     identity: str,
     can_publish: bool,
-    can_subscribe: bool,
+    can_subscribe: bool=True,
     can_publish_data: bool = True,
 ) -> None:
     """

@@ -251,6 +251,13 @@ async def list_classrooms_for_batch(
     """
     return await classroom_list_service.get_classrooms_for_batch(batch_id, current_user)
  
+@router.get("/{classroom_id}/mic/my-state")
+async def get_my_mic_state(
+    classroom_id: UUID,
+    user: UserOut = Depends(get_current_user),
+):
+    """Student polls their own mic permission state from Redis."""
+    return await service.get_student_mic_state(classroom_id, user)
  
 @router.get("/{classroom_id}/detail")
 async def get_classroom_detail(
